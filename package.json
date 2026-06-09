@@ -41,6 +41,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.7",
     "isomorphic-git": "^1.38.4",
+    "pg": "^8.21.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
