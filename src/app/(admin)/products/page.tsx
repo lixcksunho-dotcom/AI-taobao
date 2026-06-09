@@ -137,7 +137,12 @@ export default function ProductsPage() {
                   {/* 이미지 */}
                   <td className="px-4 py-3">
                     {p.images?.[0] ? (
-                      <img src={p.images[0]} alt="" className="w-14 h-14 object-cover rounded-lg" />
+                      <img
+                        src={`/api/img?url=${encodeURIComponent(p.images[0])}`}
+                        alt=""
+                        className="w-14 h-14 object-cover rounded-lg"
+                        onError={e => { (e.target as HTMLImageElement).src = p.images[0] }}
+                      />
                     ) : (
                       <div className="w-14 h-14 bg-gray-100 rounded-lg flex items-center justify-center text-gray-300 text-xs">없음</div>
                     )}

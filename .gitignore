@@ -33,6 +33,10 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# 타오바오 스크래퍼 데이터 (보안 — 절대 커밋 금지)
+.taobao-cookies.json
+.chrome-profile/
+
 # vercel
 .vercel
 

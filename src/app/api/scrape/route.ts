@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     if (!url) return NextResponse.json({ error: 'url 필요' }, { status: 400 })
 
     const product = await scrapeTaobaoProduct(url)
-    const title_kr = await translateProductTitle(product.title_cn)
+    const title_kr = await translateProductTitle(product.title_cn).catch(() => product.title_cn)
     const price_krw = calculateKrwPrice(product.price_cny)
 
     const result = { ...product, title_kr, price_krw }

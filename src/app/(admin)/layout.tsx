@@ -1,11 +1,13 @@
 import Link from 'next/link'
 
 const NAV = [
-  { href: '/dashboard', label: '대시보드' },
-  { href: '/orders', label: '주문 관리' },
-  { href: '/products', label: '상품 관리' },
-  { href: '/cs', label: 'CS 문의' },
-  { href: '/scraper', label: '스크래퍼' },
+  { href: '/dashboard',  label: '대시보드' },
+  { href: '/orders',     label: '주문 관리' },
+  { href: '/products',   label: '상품 관리' },
+  { href: '/pipeline',   label: '번역/지재권' },
+  { href: '/trademark',  label: '상표 관리' },
+  { href: '/cs',         label: 'CS 문의' },
+  { href: '/scraper',    label: '스크래퍼' },
 ]
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
