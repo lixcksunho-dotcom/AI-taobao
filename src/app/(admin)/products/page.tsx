@@ -86,6 +86,27 @@ export default function ProductsPage() {
         <h1 className="text-2xl font-bold">상품 관리</h1>
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-400">총 {products.length}개</span>
+          {/* CSV 내보내기 드롭다운 */}
+          <div className="relative group">
+            <button className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50 flex items-center gap-1">
+              내보내기 ▾
+            </button>
+            <div className="absolute right-0 top-full mt-1 bg-white border rounded-xl shadow-lg py-1 w-44 hidden group-hover:block z-10">
+              {[
+                ['general',    '기본 CSV'],
+                ['smartstore', '스마트스토어'],
+                ['coupang',    '쿠팡'],
+              ].map(([f, l]) => (
+                <a
+                  key={f}
+                  href={`/api/products/export?format=${f}&status=passed`}
+                  className="block px-4 py-2 text-sm hover:bg-gray-50"
+                >
+                  {l}
+                </a>
+              ))}
+            </div>
+          </div>
           <Link
             href="/scraper"
             className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"

@@ -8,6 +8,7 @@ const NAV = [
   { href: '/trademark',  label: '상표 관리' },
   { href: '/cs',         label: 'CS 문의' },
   { href: '/scraper',    label: '스크래퍼' },
+  { href: '/settings',   label: '설정' },
 ]
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
