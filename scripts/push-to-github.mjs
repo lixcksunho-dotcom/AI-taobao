@@ -12,6 +12,9 @@
  * 필요 권한: repo (전체)
  */
 
+// 회사 네트워크 SSL 검사 우회 (self-signed cert 오류 방지)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+
 import git from 'isomorphic-git'
 import http from 'isomorphic-git/http/node'
 import fs from 'node:fs'
