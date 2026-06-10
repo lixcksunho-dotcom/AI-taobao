@@ -11,6 +11,13 @@ import cv2
 from PIL import Image, ImageDraw, ImageFont
 from rapidocr_onnxruntime import RapidOCR
 
+# Windows 콘솔(cp949)에서 한글/중국어 print 시 UnicodeEncodeError로 죽는 것 방지
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 FONT_PATH = r"C:\Windows\Fonts\malgun.ttf"
 FONT_BOLD = r"C:\Windows\Fonts\malgunbd.ttf"
 CONF_MIN = 0.5
@@ -37,39 +44,72 @@ def load_env():
 def has_chinese(s):
     return bool(re.search(r"[一-鿿]", s))
 
+_TRANSLATE_RULES = (
+    "다음은 중국 쇼핑몰(타오바오/1688) 상품 이미지에 박힌 문구들이다. "
+    "한국 쇼핑몰 상세페이지에 실제로 쓸 법한 자연스럽고 간결한 한국어로 번역해라.\n"
+    "규칙:\n"
+    "- 의류/잡화 패션 용어로. 예) 纯欲→청순섹시, 聚拢美胸→가슴 모아주는, 显瘦→슬림해보이는, "
+    "免穿文胸→노브라 가능, 防走光→비침 방지, 内置胸垫→패드 내장, 收腰→허리 잘록, "
+    "莫代尔→모달, 莱赛尔→텐셀, 高弹→신축성, 滑爽→부드럽고 산뜻한.\n"
+    "- 색상명은 한국 쇼핑몰 표기로 '짧게 한 단어'(예: 浅蓝→연블루, 卡其→카키, 杏色→아이보리, 蓝绿→민트, 浅绿→연그린, 黑色→블랙, 粉色→핑크). 길게 풀어쓰지 말 것.\n"
+    "- 사이즈/숫자는 그대로. 원문보다 길지 않게, 짧고 매력적으로.\n"
+    "- 브랜드명 직역 금지. OCR 오인식으로 글자가 깨졌으면 문맥상 가장 그럴듯한 패션 문구로 보정.\n"
+    "- 한국어로 의미없는 음역(예: '순욕')은 쓰지 말 것. 한자를 그대로 두지 말고 반드시 한국어로.\n"
+    "- 각 항목 모두 빠짐없이 번역. 번역 결과에 한자가 남으면 안 됨.\n"
+)
+
+def _api_translate(todo, api_key):
+    """todo 리스트를 번호키 JSON으로 번역 → todo와 같은 순서의 결과 리스트(실패=None)"""
+    listing = "\n".join(f"{i+1}. {t}" for i, t in enumerate(todo))
+    prompt = (_TRANSLATE_RULES +
+              "\n반드시 '번호'를 키로 하는 JSON으로만 응답: "
+              "{\"1\":\"번역1\", \"2\":\"번역2\", ...}. 모든 번호 포함.\n\n" + listing)
+    body = json.dumps({
+        "model": "claude-haiku-4-5-20251001", "max_tokens": 2048,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages", data=body,
+        headers={"content-type": "application/json", "x-api-key": api_key,
+                 "anthropic-version": "2023-06-01"})
+    out = [None] * len(todo)
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            resp = json.loads(r.read())
+        text = resp["content"][0]["text"]
+        j = re.search(r"\{[\s\S]*\}", text)
+        parsed = json.loads(j.group(0)) if j else {}
+    except Exception as e:
+        print(f"  번역 API 오류: {str(e)[:60]}")
+        return out
+    for k, v in parsed.items():
+        m = re.match(r"\s*(\d+)", str(k))
+        if not m or not v:
+            continue
+        idx = int(m.group(1)) - 1
+        val = str(v).strip()
+        # 번호 기준 매핑(키 불일치 방지) + 한자 잔존 결과는 실패 처리
+        if 0 <= idx < len(todo) and val and not has_chinese(val):
+            out[idx] = val
+    return out
+
 def translate_batch(texts, api_key, cache=None):
+    """원문→번역 dict 반환. 번역 실패 시 값은 None(원문 중국어를 절대 그대로 쓰지 않음)."""
     cache = cache if cache is not None else {}
     todo = [t for t in texts if t not in cache]
     if todo:
-        listing = "\n".join(f"{i+1}. {t}" for i, t in enumerate(todo))
-        prompt = (
-            "다음은 중국 쇼핑몰(타오바오/1688) 상품 이미지에 박힌 문구들이다. "
-            "한국 쇼핑몰 상세페이지에 실제로 쓸 법한 자연스럽고 간결한 한국어로 번역해라.\n"
-            "규칙:\n"
-            "- 의류/잡화 패션 용어로. 예) 纯欲→청순섹시, 聚拢美胸→가슴 모아주는, 显瘦→슬림해보이는, "
-            "免穿文胸→노브라 가능, 防走光→비침 방지, 内置胸垫→패드 내장, 收腰→허리 잘록.\n"
-            "- 색상명은 한국 쇼핑몰 표기로 '짧게 한 단어'(예: 浅蓝→연블루, 卡其→카키, 杏色→아이보리, 蓝绿→민트, 浅绿→연그린, 黑色→블랙, 粉色→핑크). 길게 풀어쓰지 말 것.\n"
-            "- 사이즈/숫자는 그대로. 원문보다 길지 않게, 짧고 매력적으로.\n"
-            "- 브랜드명 직역 금지. OCR 오인식으로 글자가 깨졌으면 문맥상 가장 그럴듯한 패션 문구로 보정.\n"
-            "- 한국어로 의미없는 음역(예: '순욕')은 쓰지 말 것.\n"
-            "반드시 JSON 객체로만 응답: {\"원문\":\"번역\"}\n\n" + listing
-        )
-        body = json.dumps({
-            "model": "claude-haiku-4-5-20251001", "max_tokens": 2048,
-            "messages": [{"role": "user", "content": prompt}],
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages", data=body,
-            headers={"content-type": "application/json", "x-api-key": api_key,
-                     "anthropic-version": "2023-06-01"})
-        with urllib.request.urlopen(req, timeout=40) as r:
-            out = json.loads(r.read())
-        text = out["content"][0]["text"]
-        j = re.search(r"\{[\s\S]*\}", text)
-        parsed = json.loads(j.group(0)) if j else {}
-        for k, v in parsed.items():
-            cache[k] = v
-    return {t: cache.get(t, t) for t in texts}
+        res = _api_translate(todo, api_key)
+        for t, r in zip(todo, res):
+            if r is not None:
+                cache[t] = r
+        # 실패건만 한 번 더 개별 재시도
+        failed = [t for t, r in zip(todo, res) if r is None]
+        if failed:
+            res2 = _api_translate(failed, api_key)
+            for t, r in zip(failed, res2):
+                if r is not None:
+                    cache[t] = r
+    return {t: cache.get(t) for t in texts}
 
 def quad_bbox(box):
     xs = [p[0] for p in box]; ys = [p[1] for p in box]
@@ -214,10 +254,12 @@ def process_one(src, dst, env, cache, raw=False, smart=False):
     uniq = list({t for *_, t in items})
     trans = translate_batch(uniq, env["ANTHROPIC_API_KEY"], cache) if uniq else {}
     for cn in uniq:
-        print(f"  {cn} -> {trans.get(cn, '(미)')}")
+        print(f"  {cn} -> {trans.get(cn) or '(번역실패-원본유지)'}")
 
+    # 번역 성공(한자 잔존 없음)한 박스만 처리. 실패 박스는 inpaint·렌더 모두 스킵 → 원본 그대로(두부/중국어 잔존 방지)
+    items = [it for it in items if trans.get(it[4]) and not has_chinese(trans[it[4]])]
     if not items:
-        cv2.imencode(".jpg", img)[1].tofile(dst)
+        cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tofile(dst)
         return 0
 
     # 채도 높은 단색 뱃지 → 색 채움 보존 / 그 외(옷·사진 위 글자) → inpaint 후 글자만 직접 렌더
@@ -239,14 +281,14 @@ def process_one(src, dst, env, cache, raw=False, smart=False):
         region = img[y0:y1, x0:x1]
         bg, fg, var = bg_and_text_color(region)
         sat = max(bg) - min(bg)
-        kr = trans.get(cn, cn)
+        kr = trans[cn]   # 위에서 번역 성공한 항목만 남김
         w, h = x1 - x0, y1 - y0
         cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
         is_badge = var < 800 and sat > 45     # 빨강/색 뱃지 등 단색 배경
         if is_badge:
             cv2.rectangle(img, (x0, y0), (x1, y1), bg, -1)
             font, lines = wrap_fit(kr, int(w * 1.3), int(h * 2.2))
-            fills.append((cx, cy, fg, lines, font))
+            fills.append((cx, cy, fg, lines, font, False))   # 단색 뱃지: 외곽선 불필요
         else:
             cv2.rectangle(inpaint_mask, (x0, y0), (x1, y1), 255, -1)
             # 세로로 쌓인 원문(높이>너비)은 글자너비 기준, 가로글은 높이 기준
@@ -265,22 +307,30 @@ def process_one(src, dst, env, cache, raw=False, smart=False):
                     lines = [kr]
                 else:
                     font, lines = wrap_fit(kr, maxw, target * 4)
-            fills.append((cx, cy, fg, lines, font))
+            fills.append((cx, cy, fg, lines, font, True))    # 사진/옷 위 글자: 외곽선으로 가독성 확보
     if inpaint_mask.any():
-        img = cv2.inpaint(img, inpaint_mask, 4, cv2.INPAINT_TELEA)
+        # 마스크를 살짝 키워 원문 가장자리 잔여까지 제거
+        inpaint_mask = cv2.dilate(inpaint_mask, np.ones((3, 3), np.uint8), iterations=1)
+        img = cv2.inpaint(img, inpaint_mask, 3, cv2.INPAINT_TELEA)
 
     pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(pil)
-    for cx, cy, fg, lines, font in fills:
+    for cx, cy, fg, lines, font, stroke in fills:
         color = (fg[2], fg[1], fg[0])   # BGR→RGB
-        line_h = font.getbbox("가")[3] + 4
+        # 글자색 밝기에 따라 반대색 외곽선 → 흰배경 흰글자/검은배경 검은글자에도 또렷
+        sw, scol = 0, None
+        if stroke:
+            lum = 0.299 * fg[2] + 0.587 * fg[1] + 0.114 * fg[0]
+            scol = (40, 40, 40) if lum > 140 else (250, 250, 250)
+            sw = max(2, font.size // 14)
+        line_h = font.getbbox("가")[3] + 4 + sw
         total_h = line_h * len(lines)
-        max_lw = max(font.getbbox(l)[2] for l in lines)
         ty = int(min(max(cy - total_h / 2, 2), H - total_h - 2))
         for ln in lines:
             tw = font.getbbox(ln)[2]
-            tx = int(min(max(cx - tw / 2, 2), W - tw - 2))
-            draw.text((tx, ty), ln, font=font, fill=color)
+            tx = int(min(max(cx - tw / 2, 2 + sw), W - tw - 2 - sw))
+            draw.text((tx, ty), ln, font=font, fill=color,
+                      stroke_width=sw, stroke_fill=scol)
             ty += line_h
 
     pil.save(dst, quality=92)
