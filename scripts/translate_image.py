@@ -23,6 +23,10 @@ FONT_BOLD = r"C:\Windows\Fonts\malgunbd.ttf"
 CONF_MIN = 0.5
 MIN_SIDE = 600      # 짧은 변 600px 미만 = 저화질/아이콘/변형썸네일 → 제외 (고화질만 유지)
 MIN_BYTES = 5000    # 5KB 미만 = 빈/손상 → 제외
+# 공급처 워터마크/회사명/연락처 — 번역·잔존이 아니라 '제거'(inpaint) 대상
+WATERMARK_RE = re.compile(
+    r"有限公司|公司|旗舰店|专卖店|商行|商贸|批发|工厂|厂家|微信|抖音|快手|淘宝|阿里|天猫|拼多多|"
+    r"版权|侵权必究|\bVX\b|\bvx\b|www\.|https?://|\.com|\.cn|\.net|@", re.I)
 _ocr = None
 
 def get_ocr():
@@ -243,31 +247,54 @@ def process_one(src, dst, env, cache, raw=False, smart=False):
     before = len(items)
     items = refine_items(items)
 
-    # smart 모드: 색상/사이즈 옵션 차트(짧은 라벨 여러 개)만 번역, 그 외 사진은 원본 유지
+    # 공급처 워터마크/회사명은 번역하지 않고 '제거'(inpaint) 대상으로 분리
+    watermarks = [it for it in items if WATERMARK_RE.search(it[4])]
+    items = [it for it in items if not WATERMARK_RE.search(it[4])]
+
+    inpaint_mask = np.zeros((H, W), np.uint8)
+    for x0, y0, x1, y1, _cn in watermarks:
+        # 박스 전체를 칠하면 배경까지 뭉개져 얼룩 → 반투명 '글자 획'만 정밀 마스킹
+        bx0, by0 = max(0, x0-4), max(0, y0-4)
+        bx1, by1 = min(W, x1+4), min(H, y1+4)
+        reg = img[by0:by1, bx0:bx1]
+        if reg.size == 0:
+            continue
+        g = cv2.cvtColor(reg, cv2.COLOR_BGR2GRAY)
+        sigma = max(3.0, (by1 - by0) / 3.0)
+        bgest = cv2.GaussianBlur(g, (0, 0), sigmaX=sigma)   # 저주파=배경 추정
+        diff = cv2.absdiff(g, bgest)                         # 고주파=글자 획
+        _, m = cv2.threshold(diff, 14, 255, cv2.THRESH_BINARY)
+        m = cv2.dilate(m, np.ones((3, 3), np.uint8), iterations=1)
+        inpaint_mask[by0:by1, bx0:bx1] = np.maximum(inpaint_mask[by0:by1, bx0:bx1], m)
+    if watermarks:
+        print(f"워터마크 제거 {len(watermarks)}건: " + ", ".join(w[4][:16] for w in watermarks))
+
+    # smart 모드: 색상/사이즈 옵션 차트(짧은 라벨 여러 개)만 번역, 그 외 글자는 번역 안 함(워터마크는 위에서 제거)
     if smart:
         short = [it for it in items if len(it[4]) <= 5]
         size_kw = any(re.search(r'[码尺]|size|S|M|L|XL', it[4], re.I) for it in items)
         is_chart = (len(items) >= 3 and len(short) >= 3) or (size_kw and len(items) >= 3)
         if not is_chart:
-            cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tofile(dst)
-            return 0
-    print(f"중국어 검출: {before}건 → 정제 {len(items)}건{' [옵션차트]' if smart else ''}")
+            items = []
+    if items:
+        print(f"중국어 검출: {before}건 → 정제 {len(items)}건{' [옵션차트]' if smart else ''}")
 
     uniq = list({t for *_, t in items})
     trans = translate_batch(uniq, env["ANTHROPIC_API_KEY"], cache) if uniq else {}
     for cn in uniq:
         print(f"  {cn} -> {trans.get(cn) or '(번역실패-원본유지)'}")
 
-    # 번역 성공(한자 잔존 없음)한 박스만 처리. 실패 박스는 inpaint·렌더 모두 스킵 → 원본 그대로(두부/중국어 잔존 방지)
+    # 번역 성공(한자 잔존 없음)한 박스만 처리. 실패 박스는 렌더 스킵 → 원본 그대로(두부/중국어 잔존 방지)
     items = [it for it in items if trans.get(it[4]) and not has_chinese(trans[it[4]])]
-    if not items:
+
+    # 번역할 것도, 제거할 워터마크도 없으면 원본 그대로 저장
+    if not items and not inpaint_mask.any():
         cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tofile(dst)
         return 0
 
     # 채도 높은 단색 뱃지 → 색 채움 보존 / 그 외(옷·사진 위 글자) → inpaint 후 글자만 직접 렌더
     pad = 3
     fills = []   # (cx, cy, fg, lines, font, mode)
-    inpaint_mask = np.zeros((H, W), np.uint8)
     # 각 항목 중심 (이웃 간격 계산용)
     ctrs = [((it[0]+it[2])//2, (it[1]+it[3])//2) for it in items]
     for ii, (x0, y0, x1, y1, cn) in enumerate(items):
