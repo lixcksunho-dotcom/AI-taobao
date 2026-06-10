@@ -29,6 +29,38 @@ WATERMARK_RE = re.compile(
     r"微信|抖音|快手|淘宝|阿里|天猫|拼多多|版权|侵权必究|"
     r"AI生成|AI制图|豆包|即梦|文心|通义|可灵|美图|"
     r"\bVX\b|\bvx\b|www\.|https?://|\.com|\.cn|\.net|@", re.I)
+
+# 색상/사이즈어(반복돼도 워터마크로 오인하면 안 됨)
+_CN_COLORS = ("卡其", "杏色", "浅蓝", "浅绿", "蓝绿", "藏青", "墨绿", "驼色", "米白", "米色",
+              "酒红", "豆绿", "雾霾蓝", "克莱因蓝", "焦糖", "奶杏", "燕麦")
+_SIZE_RE = re.compile(r"[码尺]|均码|XS|XL|XXL|XXXL|\bS\b|\bM\b|\bL\b")
+
+# 정상 영문 디자인 텍스트(워터마크 아님) — 라틴 반복글자 오제거 방지
+_EN_STOP = {"summer", "winter", "spring", "autumn", "fall", "new", "in", "ootd", "detail",
+            "details", "style", "fashion", "color", "colour", "size", "sale", "hot", "fabric",
+            "material", "design", "show", "display", "model", "vol", "the", "of", "and", "for"}
+
+def is_brandlike(t):
+    """짧은 브랜드/워터마크성 글자인가(색상·사이즈·숫자·정상영문 제외) — 교차이미지 반복 탐지용"""
+    s = t.strip()
+    chars = re.findall(r"[一-鿿]", s)
+    if chars:   # 중국어 후보
+        if not (2 <= len(chars) <= 6):
+            return False
+        if _SIZE_RE.search(s) or re.search(r"\d", s):
+            return False
+        if s.endswith("色") or any(c in s for c in _CN_COLORS):
+            return False
+        return True
+    # 라틴 후보: 짧은 영문 1~2단어, 숫자·불용어 제외(브랜드명 'Fei Yun' 등)
+    letters = re.sub(r"[^A-Za-z]", "", s)
+    if not (3 <= len(letters) <= 12) or re.search(r"\d", s):
+        return False
+    words = [w for w in re.split(r"\s+", s) if w]
+    if len(words) > 2 or any(w.lower() in _EN_STOP for w in words):
+        return False
+    return True
+
 _ocr = None
 
 def get_ocr():
@@ -216,7 +248,20 @@ def wrap_fit(text, w, h, bold=False):
     font = ImageFont.truetype(path, 11)
     return font, [text]
 
-def process_one(src, dst, env, cache, raw=False, smart=False):
+def extract_all_items(img):
+    """이미지에서 모든 OCR 항목(중국어+라틴) 추출 → [(x0,y0,x1,y1,text)] (원본 좌표)"""
+    H, W = img.shape[:2]
+    scale = 2.0 if max(H, W) < 1100 else 1.0
+    ocr_img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC) if scale != 1 else img
+    res, _ = get_ocr()(ocr_img)
+    items = []
+    for box, text, conf in (res or []):
+        if float(conf) >= CONF_MIN and (text or "").strip():
+            x0, y0, x1, y1 = quad_bbox(box)
+            items.append((int(x0/scale), int(y0/scale), int(x1/scale), int(y1/scale), text))
+    return items
+
+def process_one(src, dst, env, cache, raw=False, smart=False, all_items=None, dynamic_wm=None):
     # 품질 필터: 디코드 불가/너무 작음/저용량 = 불필요(아이콘·뱃지·손상) → 제외(출력 안 함)
     img = cv2.imdecode(np.fromfile(src, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
@@ -235,23 +280,33 @@ def process_one(src, dst, env, cache, raw=False, smart=False):
         cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tofile(dst)
         return 0
 
-    # OCR (작은 이미지는 업스케일해 정확도↑)
-    scale = 2.0 if max(H, W) < 1100 else 1.0
-    ocr_img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC) if scale != 1 else img
-    res, _ = get_ocr()(ocr_img)
-    res = res or []
+    # OCR (사전 탐지에서 받은 결과 있으면 재사용, 없으면 직접). all = 중국어+라틴 전체
+    allit = all_items if all_items is not None else extract_all_items(img)
+    dyn = dynamic_wm or set()
+    def _is_wm(t):
+        return bool(WATERMARK_RE.search(t)) or (t.strip() in dyn)
 
-    items = []
-    for box, text, conf in res:
-        if float(conf) >= CONF_MIN and has_chinese(text):
-            x0, y0, x1, y1 = quad_bbox(box)
-            items.append((int(x0/scale), int(y0/scale), int(x1/scale), int(y1/scale), text))
-    before = len(items)
-    items = refine_items(items)
-
-    # 공급처 워터마크/회사명은 번역하지 않고 '제거'(inpaint) 대상으로 분리
-    watermarks = [it for it in items if WATERMARK_RE.search(it[4])]
-    items = [it for it in items if not WATERMARK_RE.search(it[4])]
+    # 워터마크(스크립트 무관: 회사명/URL/교차반복 브랜드마크) → 제거
+    watermarks = [it for it in allit if _is_wm(it[4])]
+    # 워터마크에 인접한 '라틴' 텍스트도 같은 워터마크의 로마자 표기로 보고 제거
+    # (예: 菲韵 옆 'Fei Yun' — OCR이 매번 다르게 읽혀 반복탐지가 안 되므로 위치로 처리). 한자 콜아웃은 보호
+    wm_ids = {id(w) for w in watermarks}
+    extra = []
+    for w in watermarks:
+        ww, hh = max(1, w[2]-w[0]), max(1, w[3]-w[1])
+        ax0, ay0 = w[0]-int(0.4*ww), w[1]-int(1.4*hh)
+        ax1, ay1 = w[2]+int(0.4*ww), w[3]+int(1.4*hh)
+        for b in allit:
+            if id(b) in wm_ids or id(b) in {id(e) for e in extra} or has_chinese(b[4]):
+                continue
+            if not (b[2] < ax0 or b[0] > ax1 or b[3] < ay0 or b[1] > ay1):
+                extra.append(b)
+    watermarks = watermarks + extra
+    wm_texts = {it[4] for it in watermarks}
+    # 번역 대상은 중국어 항목 중 워터마크 아닌 것
+    cn_only = [it for it in allit if has_chinese(it[4]) and it[4] not in wm_texts and not _is_wm(it[4])]
+    before = len(cn_only)
+    items = refine_items(cn_only)
 
     inpaint_mask = np.zeros((H, W), np.uint8)
     for x0, y0, x1, y1, _cn in watermarks:
@@ -391,12 +446,35 @@ def main():
         files = sorted([f for f in glob.glob(os.path.join(args.src, "*"))
                         if re.search(r"\.(jpg|jpeg|png|webp)$", f, re.I)])
         print(f"배치: {len(files)}개")
+
+        # 교차이미지 워터마크 사전 탐지: 폴더 전체 OCR → 여러 이미지에 반복되는
+        # 짧은 브랜드성 글자(색상·사이즈·숫자 제외)를 동적 워터마크로 등록(OCR 결과는 캐시해 재사용)
+        ocr_cache, counter = {}, {}
+        dynamic_wm = set()
+        if not args.raw and len(files) >= 2:
+            for f in files:
+                try:
+                    img = cv2.imdecode(np.fromfile(f, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if img is None or min(img.shape[:2]) < MIN_SIDE:
+                        continue
+                    its = extract_all_items(img)
+                    ocr_cache[f] = its
+                    for t in {it[4].strip() for it in its}:
+                        if is_brandlike(t):
+                            counter[t] = counter.get(t, 0) + 1
+                except Exception:
+                    pass
+            dynamic_wm = {t for t, c in counter.items() if c >= 2}
+            if dynamic_wm:
+                print(f"교차이미지 워터마크 감지: {', '.join(sorted(dynamic_wm))}")
+
         total, dropped, kept = 0, 0, 0
         for f in files:
             name = os.path.splitext(os.path.basename(f))[0] + ".jpg"
             out = os.path.join(args.dst, name)
             try:
-                n = process_one(f, out, env, cache, raw=args.raw, smart=args.smart)
+                n = process_one(f, out, env, cache, raw=args.raw, smart=args.smart,
+                                 all_items=ocr_cache.get(f), dynamic_wm=dynamic_wm)
                 if n < 0:
                     dropped += 1
                 else:
