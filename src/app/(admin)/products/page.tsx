@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 
 interface Product {
@@ -31,13 +30,30 @@ export default function ProductsPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editPrice, setEditPrice] = useState('')
+  const [gallery, setGallery] = useState<{ id: string; title: string; images: string[] } | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 20
+
+  // 상세페이지 HTML(번역 상세컷 포함)을 클립보드로 복사
+  async function copyDetailHtml(id: string) {
+    try {
+      const res = await fetch(`/api/products/detail-html?id=${id}&format=json`)
+      const { html } = await res.json()
+      await navigator.clipboard.writeText(html)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      alert('복사 실패')
+    }
+  }
 
   const load = useCallback(async () => {
-    const supabase = createClient()
-    let q = supabase.from('products').select('*').order('scraped_at', { ascending: false })
-    if (statusFilter) q = q.eq('stock_status', statusFilter)
-    const { data } = await q
-    setProducts(data ?? [])
+    // RLS 우회를 위해 서버 API(service 키)로 조회
+    const params = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : ''
+    const res = await fetch(`/api/products${params}`)
+    const data = await res.json()
+    setProducts(Array.isArray(data) ? data : [])
     setLoading(false)
   }, [statusFilter])
 
@@ -78,6 +94,12 @@ export default function ProductsPage() {
     p.title_kr?.toLowerCase().includes(search.toLowerCase()) ||
     p.title_cn?.includes(search)
   )
+
+  // 검색·필터·데이터 변동 시 현재 페이지가 범위를 벗어나면 보정
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  useEffect(() => { setPage(1) }, [search, statusFilter])
+  const currentPage = Math.min(page, totalPages)
+  const paged = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   return (
     <div className="p-8">
@@ -153,17 +175,27 @@ export default function ProductsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map(p => (
+              {paged.map(p => (
                 <tr key={p.id} className="hover:bg-gray-50 transition-colors">
                   {/* 이미지 */}
                   <td className="px-4 py-3">
                     {p.images?.[0] ? (
-                      <img
-                        src={`/api/img?url=${encodeURIComponent(p.images[0])}`}
-                        alt=""
-                        className="w-14 h-14 object-cover rounded-lg"
-                        onError={e => { (e.target as HTMLImageElement).src = p.images[0] }}
-                      />
+                      <button
+                        type="button"
+                        onClick={() => setGallery({ id: p.id, title: p.title_kr || p.title_cn, images: p.images })}
+                        className="relative block"
+                        title="상세컷(번역본) 보기"
+                      >
+                        <img
+                          src={p.images[0]}
+                          alt=""
+                          className="w-14 h-14 object-cover rounded-lg hover:ring-2 hover:ring-blue-400"
+                          onError={e => { (e.target as HTMLImageElement).src = `/api/img?url=${encodeURIComponent(p.images[0])}` }}
+                        />
+                        {p.images.length > 1 && (
+                          <span className="absolute -bottom-1 -right-1 bg-blue-600 text-white text-[10px] px-1 rounded-full">{p.images.length}</span>
+                        )}
+                      </button>
                     ) : (
                       <div className="w-14 h-14 bg-gray-100 rounded-lg flex items-center justify-center text-gray-300 text-xs">없음</div>
                     )}
@@ -258,6 +290,42 @@ export default function ProductsPage() {
             </tbody>
           </table>
 
+          {/* 페이지네이션 */}
+          {filtered.length > PAGE_SIZE && (
+            <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50 text-sm">
+              <span className="text-gray-500">
+                {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} / {filtered.length}개
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 rounded border bg-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-100"
+                >
+                  이전
+                </button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(n => (
+                  <button
+                    key={n}
+                    onClick={() => setPage(n)}
+                    className={`px-3 py-1 rounded border ${
+                      n === currentPage ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1 rounded border bg-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-100"
+                >
+                  다음
+                </button>
+              </div>
+            </div>
+          )}
+
           {filtered.length === 0 && (
             <div className="py-16 text-center">
               {products.length === 0 ? (
@@ -272,6 +340,42 @@ export default function ProductsPage() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 상세컷(번역본) 갤러리 라이트박스 */}
+      {gallery && (
+        <div
+          className="fixed inset-0 bg-black/80 z-50 flex flex-col"
+          onClick={() => setGallery(null)}
+        >
+          <div className="flex items-center justify-between px-6 py-4 text-white shrink-0" onClick={e => e.stopPropagation()}>
+            <span className="font-medium truncate">{gallery.title} · 상세컷 {gallery.images.length}장 (번역본)</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => copyDetailHtml(gallery.id)}
+                className="text-sm px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 transition-colors"
+              >
+                {copied ? '복사됨 ✓' : '상세 HTML 복사'}
+              </button>
+              <a
+                href={`/api/products/detail-html?id=${gallery.id}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 transition-colors"
+              >
+                미리보기
+              </a>
+              <button onClick={() => setGallery(null)} className="text-2xl leading-none px-2">✕</button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 pb-8" onClick={e => e.stopPropagation()}>
+            <div className="max-w-2xl mx-auto space-y-2">
+              {gallery.images.map((src, i) => (
+                <img key={i} src={src} alt={`detail ${i}`} className="w-full rounded-lg bg-white" loading="lazy" />
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>

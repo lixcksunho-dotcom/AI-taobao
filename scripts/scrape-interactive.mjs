@@ -149,7 +149,10 @@ async function saveToDb(products, source) {
     images: pr.pic ? [pr.pic.startsWith('//') ? 'https:' + pr.pic : pr.pic] : [],
     options: [],
     stock_status: 'available',
-    source,
+    // NOTE: 'source' 컬럼이 DB products 테이블에 아직 없어 제외함.
+    //       추가하려면 SQL Editor에서: ALTER TABLE products ADD COLUMN IF NOT EXISTS source TEXT;
+    //       추가 후 아래 줄 주석 해제: source,
+    // source,
     scraped_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }))

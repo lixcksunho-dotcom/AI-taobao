@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { createClient } from '@/lib/supabase/client'
 
 interface Order {
   id: string
@@ -52,13 +51,13 @@ export default function OrdersPage() {
   const [notifyMsg, setNotifyMsg]     = useState('')
 
   const load = useCallback(async () => {
-    const supabase = createClient()
-    let q = supabase.from('orders').select('*').order('created_at', { ascending: false })
-    if (statusFilter) q = q.eq('status', statusFilter)
-    const { data } = await q
-    setOrders(data ?? [])
+    // RLS 우회: 서버 API(service 키)로 조회
+    const params = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : ''
+    const res = await fetch(`/api/orders${params}`)
+    const data: Order[] = res.ok ? await res.json() : []
+    setOrders(Array.isArray(data) ? data : [])
     if (selected) {
-      const refreshed = (data ?? []).find(o => o.id === selected.id)
+      const refreshed = (Array.isArray(data) ? data : []).find(o => o.id === selected.id)
       if (refreshed) setSelected(refreshed)
     }
   }, [statusFilter, selected?.id]) // eslint-disable-line react-hooks/exhaustive-deps

@@ -37,6 +37,14 @@ yarn-error.log*
 .taobao-cookies.json
 .chrome-profile/
 
+# 이미지 처리 작업 디렉터리 / 디버그 산출물 (스크래치)
+_imgsample/
+_detailsample/
+_processed/
+_out/
+debug-*.html
+debug-*.png
+
 # vercel
 .vercel
 

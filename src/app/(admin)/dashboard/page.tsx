@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 
 interface Stats {
@@ -40,52 +39,25 @@ export default function DashboardPage() {
   const [loading,      setLoading]      = useState(true)
 
   useEffect(() => {
-    const supabase = createClient()
+    let alive = true
 
+    // RLS 우회: 서버 API(service 키)로 집계 조회. 실시간 대신 30초 폴링
     async function fetchAll() {
-      const today = new Date(); today.setHours(0, 0, 0, 0)
-
-      const [
-        todayOrd, pendingOrd, revRes, openCs,
-        totalProd, passedProd, pendingPipe, blockedProd,
-        recentOrd,
-      ] = await Promise.all([
-        supabase.from('orders').select('id', { count: 'exact', head: true }).gte('created_at', today.toISOString()),
-        supabase.from('orders').select('id', { count: 'exact', head: true }).in('status', ['pending', 'paid', 'preparing']),
-        supabase.from('orders').select('total_krw').eq('status', 'done'),
-        supabase.from('cs_tickets').select('id', { count: 'exact', head: true }).eq('status', 'open'),
-        supabase.from('products').select('id', { count: 'exact', head: true }),
-        supabase.from('products').select('id', { count: 'exact', head: true }).eq('trademark_status', 'passed'),
-        supabase.from('products').select('id', { count: 'exact', head: true }).eq('trademark_status', 'pending'),
-        supabase.from('products').select('id', { count: 'exact', head: true }).eq('trademark_status', 'blocked'),
-        supabase.from('orders').select('id, order_number, customer_name, status, total_krw, created_at')
-          .order('created_at', { ascending: false }).limit(6),
-      ])
-
-      const totalRevenue = (revRes.data ?? []).reduce((s, o) => s + (o.total_krw ?? 0), 0)
-
-      setStats({
-        todayOrders:     todayOrd.count    ?? 0,
-        pendingOrders:   pendingOrd.count  ?? 0,
-        totalRevenue,
-        openCs:          openCs.count      ?? 0,
-        totalProducts:   totalProd.count   ?? 0,
-        passedProducts:  passedProd.count  ?? 0,
-        pendingPipeline: pendingPipe.count ?? 0,
-        blockedProducts: blockedProd.count ?? 0,
-      })
-      setRecentOrders(recentOrd.data ?? [])
-      setLoading(false)
+      try {
+        const res = await fetch('/api/dashboard')
+        if (!res.ok) return
+        const data = await res.json()
+        if (!alive) return
+        setStats(data.stats)
+        setRecentOrders(data.recentOrders ?? [])
+      } finally {
+        if (alive) setLoading(false)
+      }
     }
 
     fetchAll()
-
-    const ch = supabase.channel('dashboard')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchAll)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cs_tickets' }, fetchAll)
-      .subscribe()
-
-    return () => { supabase.removeChannel(ch) }
+    const timer = setInterval(fetchAll, 30000)
+    return () => { alive = false; clearInterval(timer) }
   }, [])
 
   if (loading) return <div className="p-8 text-gray-400">로딩 중...</div>

@@ -13,11 +13,16 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabase
     .from('products')
-    .select('id, title_cn, title_kr, trademark_status, trademark_blocked_by, processed_at, price_krw, source')
+    .select('id, taobao_id, title_cn, title_kr, trademark_status, trademark_blocked_by, processed_at, price_krw')
     .eq('trademark_status', status)
     .order('scraped_at', { ascending: false })
     .limit(limit)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ products: data })
+  // source는 별도 컬럼 없이 ID 접두사에서 파생
+  const products = (data ?? []).map(p => ({
+    ...p,
+    source: p.taobao_id?.startsWith('1688_') ? '1688' : 'taobao',
+  }))
+  return NextResponse.json({ products })
 }
