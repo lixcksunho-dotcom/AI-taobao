@@ -55,7 +55,9 @@ _TRANSLATE_RULES = (
     "- 사이즈/숫자는 그대로. 원문보다 길지 않게, 짧고 매력적으로.\n"
     "- 브랜드명 직역 금지. OCR 오인식으로 글자가 깨졌으면 문맥상 가장 그럴듯한 패션 문구로 보정.\n"
     "- 한국어로 의미없는 음역(예: '순욕')은 쓰지 말 것. 한자를 그대로 두지 말고 반드시 한국어로.\n"
-    "- 각 항목 모두 빠짐없이 번역. 번역 결과에 한자가 남으면 안 됨.\n"
+    "- OCR 오인식으로 깨진 의미불명 문자열(예: '米苏42巴斯元342'), 또는 매장명·간판·배경 글자 등 "
+    "상품과 무관해 번역이 불필요/불가하면 그 항목은 빈 문자열(\"\")로 둘 것. 억지 음역 금지.\n"
+    "- 의미가 통하는 상품 문구는 모두 빠짐없이 번역. 번역 결과에 한자가 남으면 안 됨.\n"
 )
 
 def _api_translate(todo, api_key):
@@ -288,7 +290,7 @@ def process_one(src, dst, env, cache, raw=False, smart=False):
         if is_badge:
             cv2.rectangle(img, (x0, y0), (x1, y1), bg, -1)
             font, lines = wrap_fit(kr, int(w * 1.3), int(h * 2.2))
-            fills.append((cx, cy, fg, lines, font, False))   # 단색 뱃지: 외곽선 불필요
+            fills.append((cx, cy, fg, lines, font, False, var))   # 단색 뱃지: 외곽선 불필요
         else:
             cv2.rectangle(inpaint_mask, (x0, y0), (x1, y1), 255, -1)
             # 세로로 쌓인 원문(높이>너비)은 글자너비 기준, 가로글은 높이 기준
@@ -307,7 +309,7 @@ def process_one(src, dst, env, cache, raw=False, smart=False):
                     lines = [kr]
                 else:
                     font, lines = wrap_fit(kr, maxw, target * 4)
-            fills.append((cx, cy, fg, lines, font, True))    # 사진/옷 위 글자: 외곽선으로 가독성 확보
+            fills.append((cx, cy, fg, lines, font, True, var))    # 사진/옷 위 글자: 외곽선+캡션밴드
     if inpaint_mask.any():
         # 마스크를 살짝 키워 원문 가장자리 잔여까지 제거
         inpaint_mask = cv2.dilate(inpaint_mask, np.ones((3, 3), np.uint8), iterations=1)
@@ -315,7 +317,7 @@ def process_one(src, dst, env, cache, raw=False, smart=False):
 
     pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(pil)
-    for cx, cy, fg, lines, font, stroke in fills:
+    for cx, cy, fg, lines, font, stroke, var in fills:
         color = (fg[2], fg[1], fg[0])   # BGR→RGB
         # 글자색 밝기에 따라 반대색 외곽선 → 흰배경 흰글자/검은배경 검은글자에도 또렷
         sw, scol = 0, None
