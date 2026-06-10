@@ -23,10 +23,12 @@ FONT_BOLD = r"C:\Windows\Fonts\malgunbd.ttf"
 CONF_MIN = 0.5
 MIN_SIDE = 600      # 짧은 변 600px 미만 = 저화질/아이콘/변형썸네일 → 제외 (고화질만 유지)
 MIN_BYTES = 5000    # 5KB 미만 = 빈/손상 → 제외
-# 공급처 워터마크/회사명/연락처 — 번역·잔존이 아니라 '제거'(inpaint) 대상
+# 공급처 워터마크/회사명/연락처/AI생성마크 — 번역·잔존이 아니라 '제거'(inpaint) 대상
 WATERMARK_RE = re.compile(
-    r"有限公司|公司|旗舰店|专卖店|商行|商贸|批发|工厂|厂家|微信|抖音|快手|淘宝|阿里|天猫|拼多多|"
-    r"版权|侵权必究|\bVX\b|\bvx\b|www\.|https?://|\.com|\.cn|\.net|@", re.I)
+    r"有限公司|公司|旗舰店|专卖店|商行|商贸|批发|工厂|厂家|服饰|服装|制衣|"
+    r"微信|抖音|快手|淘宝|阿里|天猫|拼多多|版权|侵权必究|"
+    r"AI生成|AI制图|豆包|即梦|文心|通义|可灵|美图|"
+    r"\bVX\b|\bvx\b|www\.|https?://|\.com|\.cn|\.net|@", re.I)
 _ocr = None
 
 def get_ocr():
