@@ -71,7 +71,7 @@ function finish(code) {
 
 function sourceOf(url = '') {
   if (url.includes('1688.com')) return '1688'
-  if (url.includes('taobao.com')) return 'taobao'
+  if (url.includes('taobao.com') || url.includes('tmall.com')) return 'taobao' // 티몰=타오바오 그룹
   if (url.includes('aliexpress')) return 'aliexpress'
   return 'unknown'
 }

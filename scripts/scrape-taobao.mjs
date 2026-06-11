@@ -56,7 +56,11 @@ const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_
 
 async function saveToDb(items) {
   const now = new Date().toISOString()
-  const rows = items.map(o => ({
+  // 가격 0/이미지 없음 = 검색결과가 아닌 홈 프로모션·추천 위젯 잡음 → 저장 제외
+  const clean = items.filter(o => o.cny > 0 && o.img)
+  const dropped = items.length - clean.length
+  if (dropped) console.log(`  (잡음 ${dropped}건 제외: 가격0/이미지없음)`)
+  const rows = clean.map(o => ({
     taobao_id: `taobao_${o.id}`,
     taobao_url: o.url,
     title_cn: o.title,
@@ -121,43 +125,23 @@ const page = await ctx.newPage()
 let sessionDead = false
 
 try {
-  await page.goto('https://www.taobao.com', { waitUntil: 'domcontentloaded', timeout: 30000 })
-  await new Promise(r => setTimeout(r, 2500))
+  // 세션이 살아있으면 s.taobao.com/search 직접 진입이 가장 안정적
+  // (홈 검색창 Enter는 결과페이지로 안 넘어가 홈 위젯만 긁히는 문제가 있음)
+  for (let p = 1; p <= PAGES; p++) {
+    const before = collected.size
+    const url = `https://s.taobao.com/search?q=${encodeURIComponent(KEYWORD)}&page=${p}&tab=all`
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await new Promise(r => setTimeout(r, 2500))
 
-  const title = await page.title().catch(() => '')
-  if (/login|登录/i.test(page.url()) || /验证|拦截|安全/.test(title)) {
-    sessionDead = true
-  } else {
-    // 타오바오 홈 검색창: #q (name=q) — 폴백 포함
-    const box = await page.$('input#q') || await page.$('input[name="q"]') || await page.$('input[type="text"]')
-    if (!box) throw new Error('검색창을 찾지 못함')
-    await box.click(); await box.fill(KEYWORD)
-    await new Promise(r => setTimeout(r, 500))
-    await page.keyboard.press('Enter')
+    const title = await page.title().catch(() => '')
+    if (/login|登录/i.test(page.url()) || /验证|拦截|安全/.test(title)) { sessionDead = true; break }
 
-    // 1페이지 대기 + 결과 로딩 위해 스크롤(레이지 로드 유도)
-    for (let i = 0; i < 12 && collected.size === 0; i++) {
-      await page.mouse.wheel(0, 1200).catch(() => {})
-      await new Promise(r => setTimeout(r, 1500))
+    // 결과 레이지로드 유도 (recommend 응답이 채워질 때까지 스크롤)
+    for (let i = 0; i < 10 && collected.size === before; i++) {
+      await page.mouse.wheel(0, 1500).catch(() => {})
+      await new Promise(r => setTimeout(r, 1200))
     }
-
-    // 추가 페이지: '다음' 페이저 클릭 best-effort
-    for (let p = 2; p <= PAGES; p++) {
-      const before = collected.size
-      const active = ctx.pages().at(-1)
-      const clicked = await active.evaluate(() => {
-        const cand = [...document.querySelectorAll('button,a,li,span,div')]
-          .find(e => /下一页|下一頁|next/i.test((e.textContent || '').trim()) && (e.offsetParent !== null))
-        if (cand) { cand.click(); return true }
-        return false
-      }).catch(() => false)
-      if (!clicked) { console.log(`  (${p}p: 다음 버튼 없음 — 페이징 중단)`); break }
-      for (let i = 0; i < 10 && collected.size === before; i++) {
-        await active.mouse.wheel(0, 1200).catch(() => {})
-        await new Promise(r => setTimeout(r, 1500))
-      }
-      if (collected.size === before) { console.log(`  (${p}p: 신규 없음 — 중단)`); break }
-    }
+    if (collected.size === before) { console.log(`  (${p}p: 신규 없음 — 중단)`); break }
   }
 } catch (err) {
   console.log('오류:', String(err.message).slice(0, 80))

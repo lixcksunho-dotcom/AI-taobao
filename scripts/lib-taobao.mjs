@@ -44,6 +44,13 @@ function normUrl(u) {
   return ''
 }
 
+// 깨끗한 상품 상세 URL만 채택 (광고 p4p의 click.simba 추적 리다이렉트는 버림)
+function cleanItemUrl(u, id) {
+  const n = normUrl(u)
+  if (n && /(item\.taobao\.com|detail\.tmall\.com)\/item\.htm/i.test(n)) return n
+  return `https://item.taobao.com/item.htm?id=${id}`
+}
+
 // 객체가 "상품"처럼 보이는지 점수화 (id + title + (price|img) 정도면 상품)
 function looksLikeItem(o) {
   if (!o || typeof o !== 'object') return false
@@ -94,8 +101,7 @@ export function parseSearchItems(json) {
     const title = String(pick(it, TITLE_KEYS) || '').replace(/<[^>]+>/g, '').trim()
     const cny   = toCny(pick(it, PRICE_KEYS))
     const img   = normUrl(String(pick(it, IMG_KEYS) || ''))
-    const url   = normUrl(String(pick(it, URL_KEYS) || '')) ||
-                  `https://item.taobao.com/item.htm?id=${id}`
+    const url   = cleanItemUrl(String(pick(it, URL_KEYS) || ''), id)
     out.push({ id, title, cny, img, url })
   }
   return out
