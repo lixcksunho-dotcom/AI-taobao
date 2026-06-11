@@ -155,9 +155,23 @@ if (args[0] === '--all') {
   if (!force) list = list.filter(p => !Array.isArray(p.images) || p.images.length <= 1)
   const ids = list.map(p => p.taobao_id.replace('taobao_', '')).slice(0, N)
   console.log(`타오바오 보강 대상: ${ids.length}개 (${force ? '전체 재보강' : 'images≤1만'})`)
-  let ok = 0, dead = false
-  for (const id of ids) { const r = await enrichOne(ctx, id); if (r.dead) { dead = true; break } if (r.images || r.options) ok++ }
-  console.log(`\n${dead ? '⛔ 세션 만료로 중단' : '✅ 완료'}: ${ok}/${ids.length} 보강`)
+  let ok = 0, consecutiveDead = 0, aborted = false
+  for (let i = 0; i < ids.length; i++) {
+    const r = await enrichOne(ctx, ids[i])
+    if (r.dead) {
+      // 캡차는 보통 빠른 연속요청에 의한 일시적 차단 → 백오프 후 계속. 연속 3회면 진짜 만료로 판단
+      if (++consecutiveDead >= 3) { aborted = true; console.log('  ⛔ 연속 3회 차단 — 세션 만료로 판단, 중단'); break }
+      const wait = 30 * consecutiveDead
+      console.log(`  ⏳ 차단 감지 — ${wait}s 대기 후 계속...`)
+      await new Promise(res => setTimeout(res, wait * 1000))
+      continue
+    }
+    consecutiveDead = 0
+    if (r.images || r.options) ok++
+    // 캡차 회피용 상품 간 랜덤 딜레이(2.5~4.5s)
+    if (i < ids.length - 1) await new Promise(res => setTimeout(res, 2500 + Math.floor(Math.random() * 2000)))
+  }
+  console.log(`\n${aborted ? '⛔ 중단됨' : '✅ 완료'}: ${ok}/${ids.length} 보강`)
 } else if (args[0]) {
   await enrichOne(ctx, args[0].replace(/^taobao_/, ''))
 } else {
