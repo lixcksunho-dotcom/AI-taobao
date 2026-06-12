@@ -32,6 +32,9 @@ const ai = env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: env.ANTHROPIC_API_KEY
 
 const PROFILE = resolve(root, '.chrome-profile')
 if (!existsSync(PROFILE)) { console.error('❌ .chrome-profile 없음. session-login.mjs taobao 먼저'); process.exit(3) }
+const HEADED = process.argv.includes('--headed')
+const SLOW = process.argv.includes('--slow') // 차단 회피용 느린 페이스(쿨다운 재시도)
+const isBlocked = (t, url) => /登录|login|验证|拦截|安全/i.test(t) || /login|punish|captcha/i.test(url)
 
 const norm = (u) => u && u.startsWith('//') ? 'https:' + u : u
 const unwrap = (b) => { const m = b.match(/^[^({]*\(([\s\S]*)\)\s*;?\s*$/); return m ? m[1] : b }
@@ -78,8 +81,21 @@ async function enrichOne(ctx, id) {
   try {
     await page.goto(`https://item.taobao.com/item.htm?id=${id}`, { waitUntil: 'domcontentloaded', timeout: 30000 })
     await new Promise(r => setTimeout(r, 3500))
-    const t = (await page.title().catch(() => '')) || ''
-    if (/登录|login|验证|拦截/i.test(t) || /login/i.test(page.url())) { console.log(`  ${id}: ⛔ 세션/캡차`); return { dead: true } }
+    let t = (await page.title().catch(() => '')) || ''
+    if (isBlocked(t, page.url())) {
+      if (!HEADED) { console.log(`  ${id}: ⛔ 세션/캡차`); return { dead: true } }
+      // 헤드 모드: 창에서 직접 캡차를 풀 때까지 대기(최대 120초). 한 번 풀면 세션 플래그 해제됨
+      console.log(`  ${id}: 🔐 캡차 감지 — 창에서 직접 풀어주세요(최대 120초 대기)...`)
+      let cleared = false
+      for (let i = 0; i < 40; i++) {
+        await new Promise(r => setTimeout(r, 3000))
+        t = (await page.title().catch(() => '')) || ''
+        if (!isBlocked(t, page.url())) { cleared = true; break }
+      }
+      if (!cleared) { console.log(`  ${id}: ⛔ 미해결 — 중단`); return { dead: true } }
+      console.log(`  ${id}: ✓ 캡차 해제됨 — 계속`)
+      await new Promise(r => setTimeout(r, 1500))
+    }
 
     // 상세설명 탭(宝贝详情/商品详情)을 클릭해 getdesc 로딩 유도
     await page.evaluate(() => {
@@ -168,8 +184,11 @@ if (args[0] === '--all') {
     }
     consecutiveDead = 0
     if (r.images || r.options) ok++
-    // 캡차 회피용 상품 간 랜덤 딜레이(2.5~4.5s)
-    if (i < ids.length - 1) await new Promise(res => setTimeout(res, 2500 + Math.floor(Math.random() * 2000)))
+    // 캡차 회피용 상품 간 랜덤 딜레이 (--slow: 8~14s / 기본: 2.5~4.5s)
+    if (i < ids.length - 1) {
+      const base = SLOW ? 8000 : 2500, jit = SLOW ? 6000 : 2000
+      await new Promise(res => setTimeout(res, base + Math.floor(Math.random() * jit)))
+    }
   }
   console.log(`\n${aborted ? '⛔ 중단됨' : '✅ 완료'}: ${ok}/${ids.length} 보강`)
 } else if (args[0]) {
