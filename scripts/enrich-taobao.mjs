@@ -157,6 +157,14 @@ async function enrichOne(ctx, id) {
 }
 
 const args = process.argv.slice(2)
+
+// --count: 미보강(images≤1) taobao 상품 수만 출력하고 종료 (루프 오케스트레이터용, 브라우저 안 띄움)
+if (args[0] === '--count') {
+  const { data } = await sb.from('products').select('taobao_id, images').like('taobao_id', 'taobao_%')
+  const remaining = (data || []).filter(p => !Array.isArray(p.images) || p.images.length <= 1).length
+  process.stdout.write(String(remaining) + '\n', () => process.exit(0))
+}
+
 const ctx = await chromium.launchPersistentContext(PROFILE, {
   channel: 'chrome', headless: !args.includes('--headed'), viewport: { width: 1440, height: 900 },
   args: ['--no-sandbox', '--disable-blink-features=AutomationControlled', '--disable-dev-shm-usage'],
