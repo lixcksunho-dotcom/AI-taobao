@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build)",
+      "Bash(npm run lint)",
+      "Bash(npm run dev)",
+      "Bash(npm install)",
+      "Bash(npm ci)",
+      "Bash(node scripts/test-parse-1688.mjs)",
+      "Bash(node scripts/test-parse-taobao.mjs)",
+      "Bash(node scripts/verify-collection.mjs:*)",
+      "Bash(node scripts/diag-taobao.mjs:*)",
+      "Bash(node scripts/diag-taobao-detail.mjs:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(npx tsc --noEmit:*)"
+    ],
+    "deny": [
+      "Read(./.env*)",
+      "Read(./.chrome-profile/**)",
+      "Read(./.taobao-cookies.json)"
+    ]
+  }
+}

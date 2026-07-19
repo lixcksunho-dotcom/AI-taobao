@@ -55,3 +55,6 @@ __pycache__/
 
 debug-taobao-*.json
 debug-skubase.json
+
+# 스크래퍼 실행 로그
+*.log
